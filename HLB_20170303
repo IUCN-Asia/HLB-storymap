@@ -1,0 +1,326 @@
+//Story map developed in Odyssey.js: http://cartodb.github.io/odyssey.js/
+<!doctype><html><head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Odyssey.js Slides</title>
+  <meta name="description" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="icon" type="image/x-icon" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+  <link rel="icon" type="image/png" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+
+  <link rel="stylesheet" href="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/themes/css/cartodb.css">
+  <link rel="stylesheet" href="http://cartodb.github.io/odyssey.js/sandbox/css/slides.css">
+  <script src="http://cartodb.github.io/odyssey.js/vendor/modernizr-2.6.2.min.js"></script>
+</head>
+<body>
+  <div id="map" style="width: 100%; height: 100%;"></div>
+
+  <div id="slides_container" style="display:block;">
+    <div id="dots"></div>
+
+    <div id="slides"></div>
+
+    <ul id="navButtons">
+      <li><a class="prev"></a></li>
+      <li><a class="next"></a></li>
+    </ul>
+  </div>
+
+  <div id="credits">
+    <span class="title" id="title">Ha Long Bay Alliance</span>
+    <span class="author"><strong id="author">Built by IUCN using</strong> <a href="http://cartodb.github.io/odyssey.js/">Odyssey.js</a><span>
+  </span></span></div>
+
+  <script src="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/cartodb.js"></script>
+  <script src="http://cartodb.github.io/odyssey.js/dist/odyssey.js" charset="UTF-8"></script>
+
+  <script>
+    var resizePID;
+
+    function clearResize() {
+      clearTimeout(resizePID);
+      resizePID = setTimeout(function() { adjustSlides(); }, 100);
+    }
+
+    if (!window.addEventListener) {
+      window.attachEvent("resize", function load(event) {
+        clearResize();
+      });
+    } else {
+      window.addEventListener("resize", function load(event) {
+        clearResize();
+      });
+    }
+
+    function adjustSlides() {
+      var container = document.getElementById("slides_container"),
+          slide = document.querySelectorAll('.selected_slide')[0];
+
+      if (slide) {
+        if (slide.offsetHeight+169+40+80 >= window.innerHeight) {
+          container.style.bottom = "80px";
+
+          var h = container.offsetHeight;
+
+          slide.style.height = h-169+"px";
+          slide.classList.add("scrolled");
+        } else {
+          container.style.bottom = "auto";
+          container.style.minHeight = "0";
+
+          slide.style.height = "auto";
+          slide.classList.remove("scrolled");
+        }
+      }
+    }
+
+    var resizeAction = O.Action(function() {
+      function imageLoaded() {
+        counter--;
+
+        if (counter === 0) {
+          adjustSlides();
+        }
+      }
+      var images = $('img');
+      var counter = images.length;
+
+      images.each(function() {
+        if (this.complete) {
+          imageLoaded.call( this );
+        } else {
+          $(this).one('load', imageLoaded);
+        }
+      });
+    });
+
+    function click(el) {
+      var element = O.Core.getElement(el);
+      var t = O.Trigger();
+
+      // TODO: clean properly
+      function click() {
+        t.trigger();
+      }
+
+      if (element) element.onclick = click;
+
+      return t;
+    }
+
+    O.Template({
+      init: function() {
+        var seq = O.Triggers.Sequential();
+
+        var baseurl = this.baseurl = 'http://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
+        var map = this.map = L.map('map').setView([20.5814, -252.2241], 6);
+        var basemap = this.basemap = L.tileLayer(baseurl, {
+          attribution: 'data OSM - map CartoDB'
+        }).addTo(map);
+
+        // enanle keys to move
+        O.Keys().on('map').left().then(seq.prev, seq)
+        O.Keys().on('map').right().then(seq.next, seq)
+
+        click(document.querySelectorAll('.next')).then(seq.next, seq)
+        click(document.querySelectorAll('.prev')).then(seq.prev, seq)
+
+        var slides = O.Actions.Slides('slides');
+        var story = O.Story()
+
+        this.story = story;
+        this.seq = seq;
+        this.slides = slides;
+        this.progress = O.UI.DotProgress('dots').count(0);
+      },
+
+      update: function(actions) {
+        var self = this;
+
+        if (!actions.length) return;
+
+        this.story.clear();
+
+        if (this.baseurl && (this.baseurl !== actions.global.baseurl)) {
+          this.baseurl = actions.global.baseurl || 'http://0.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+
+          this.basemap.setUrl(this.baseurl);
+        }
+
+        if (this.cartoDBLayer && ("http://"+self.cartoDBLayer.options.user_name+".cartodb.com/api/v2/viz/"+self.cartoDBLayer.options.layer_definition.stat_tag+"/viz.json" !== actions.global.vizjson)) {
+          this.map.removeLayer(this.cartoDBLayer);
+
+          this.cartoDBLayer = null;
+          this.created = false;
+        }
+
+        if (actions.global.vizjson && !this.cartoDBLayer) {
+          if (!this.created) { // sendCode debounce < vis loader
+            cdb.vis.Loader.get(actions.global.vizjson, function(vizjson) {
+              self.map.fitBounds(vizjson.bounds);
+
+              cartodb.createLayer(self.map, vizjson)
+                .done(function(layer) {
+                  self.cartoDBLayer = layer;
+
+                  var sublayer = layer.getSubLayer(0),
+                      layer_name = layer.layers[0].options.layer_name,
+                      filter = actions.global.cartodb_filter ? " WHERE "+actions.global.cartodb_filter : "";
+
+                  sublayer.setSQL("SELECT * FROM "+layer_name+filter)
+
+                  self.map.addLayer(layer);
+
+                  self._resetActions(actions);
+                }).on('error', function(err) {
+                  console.log("some error occurred: " + err);
+                });
+            });
+
+            this.created = true;
+          }
+
+          return;
+        }
+
+        this._resetActions(actions);
+      },
+
+      _resetActions: function(actions) {
+        // update footer title and author
+        var title_ = actions.global.title === undefined ? '' : actions.global.title,
+            author_ = actions.global.author === undefined ? 'Using' : 'By '+actions.global.author+' using';
+
+        document.getElementById('title').innerHTML = title_;
+        document.getElementById('author').innerHTML = author_;
+        document.title = title_ + " | " + author_ +' Odyssey.js';
+
+        var sl = actions;
+
+        document.getElementById('slides').innerHTML = ''
+        this.progress.count(sl.length);
+
+        // create new story
+        for(var i = 0; i < sl.length; ++i) {
+          var slide = sl[i];
+          var tmpl = "<div class='slide' style='diplay:none'>";
+
+          tmpl += slide.html();
+          tmpl += "</div>";
+          document.getElementById('slides').innerHTML += tmpl;
+
+          this.progress.step(i).then(this.seq.step(i), this.seq)
+
+          var actions = O.Parallel(
+            this.slides.activate(i),
+            slide(this),
+            this.progress.activate(i),
+            resizeAction
+          );
+
+          actions.on("finish.app", function() {
+            adjustSlides();
+          });
+
+          this.story.addState(
+            this.seq.step(i),
+            actions
+          )
+        }
+
+        this.story.go(this.seq.current());
+      },
+
+      changeSlide: function(n) {
+        this.seq.current(n);
+      }
+    });
+  </script>
+
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-20934186-21', 'cartodb.github.io');
+    ga('send', 'pageview');
+  </script>
+
+  <script type="text/javascript" src="http://fast.fonts.net/jsapi/3af16084-ba56-49ca-b37d-0b49b59e1927.js"></script>
+
+<script type="text/template" id="md_template">```
+-baseurl: "http://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+-title: "HLB Odyssey (pre-alpha v0.0)"
+-author: "IUCN"
+```
+
+#Ha Long Bay
+```
+L.marker([20.5814, -252.2241]).actions.addRemove(S.map)
+- center: [20.5814, -252.2241]
+- zoom: 6
+```
+
+Ha Long Bay is located in northern Vietnam, approximately 150 km east of the capital of Hanoi. The bay was inscribed as a natural world heritage site in 1994 — the first in Vietnam — and is world renowned for its stunning scenery.
+
+However, in recent years, it has come under increasing pressure from an influx number of tourists, resource extraction, and incompatible uses of the area.
+
+The Ha Long Bay Alliance, with funding from  USAID is working to bring together stakeholders to protect this outstanding site.
+
+
+#Environment
+```
+L.marker([20.8139, 106.9409]).actions.addRemove(S.map)
+- center: [20.8139, 106.9409]
+- zoom: 9
+```
+
+Hi, I am filler text. If you want to insert a link, use [Markdown] (http://daringfireball.net/projects/markdown/]) (ask Dan).
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis ligula sem, vestibulum quis mattis nec, tristique suscipit urna. Duis risus mauris, lobortis in ipsum eget, auctor fringilla ex. Cras non leo eu leo sodales tempor. Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Aenean elit neque, efficitur at eros ac, sollicitudin commodo orci. Morbi faucibus lectus vel mi rhoncus, sit amet sagittis purus dapibus. Sed id est magna. Integer ac tortor id leo posuere tempus. Suspendisse fermentum porttitor velit, id porta risus auctor vel.
+
+Nam tempus, odio in aliquam condimentum, libero nisi vestibulum dolor, vitae bibendum est neque ac arcu. Sed luctus vulputate sollicitudin. Nullam suscipit arcu sit amet feugiat convallis. Nulla volutpat ornare elit eu iaculis. Praesent porttitor turpis feugiat, tristique quam efficitur, rutrum odio. Proin id sem laoreet, porta lorem vitae, volutpat tellus. Pellentesque lacinia bibendum tristique. Proin commodo euismod erat, eu condimentum sem. 
+
+
+#World Heritage
+```
+- center: [20.9646, 107.1112]
+- zoom: 10
+```
+
+The World Heritage Site...
+![HLB](http://english.baoquangninh.com.vn/dataimages/201212/original/images658314_v6.jpg)
+More text here
+
+#Pollution
+```
+- center: [20.9646, 107.1112]
+- zoom: 10
+```
+
+In recent years pollution and heavy visitation have impacted the site.
+![HLB Pollution](http://www.worldfishing.net/__data/assets/image/0009/783828/varieties/carousel.jpg)
+The Alliance is...
+
+
+#Cat Ba
+```
+- center: [20.8168, 106.9725]
+- zoom: 11
+```
+In 2013 the Government of Vietnam...
+
+![HLB](http://upload.wikimedia.org/wikipedia/commons/0/02/Bai_tam_Cat_Ba_1.JPG)
+More text here
+
+
+#The Alliance
+```
+- center: [20.9762, 107.1936]
+- zoom: 10
+```
+
+For more information, see the [Ha Long Bay Alliance](http://www.iucn.org/news_homepage/news_by_date/?14803/Vietnam-The-Ha-Long-Bay-Alliance)
+</script></body></html>
